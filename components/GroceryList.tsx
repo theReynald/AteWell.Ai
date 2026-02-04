@@ -1,6 +1,6 @@
 import { useThemeColor } from "@/hooks/useThemeColor";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -8,13 +8,12 @@ import {
     Image,
     Keyboard,
     Modal,
-    ScrollView,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
     TouchableWithoutFeedback,
-    View,
+    View
 } from "react-native";
 import { ThemedText } from "./ThemedText";
 import { ThemedView } from "./ThemedView";
@@ -45,6 +44,8 @@ export default function GroceryList() {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [pexelsApiKeyInput, setPexelsApiKeyInput] = useState("");
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [zoomedImageUrl, setZoomedImageUrl] = useState<string | null>(null);
+  const [zoomedImageName, setZoomedImageName] = useState<string>("");
 
   // Use theme colors for text/buttons, but do NOT use backgroundColor for containers
   const textColor = useThemeColor({}, "text");
@@ -382,7 +383,16 @@ export default function GroceryList() {
         <View style={styles.itemContentContainer}>
           <View style={styles.itemTopRow}>
             {/* Item image */}
-            <View style={styles.itemImageContainer}>
+            <TouchableOpacity
+              style={styles.itemImageContainer}
+              onPress={() => {
+                if (item.imageUrl) {
+                  setZoomedImageUrl(item.imageUrl);
+                  setZoomedImageName(item.name);
+                }
+              }}
+              disabled={!item.imageUrl}
+            >
               {item.isLoadingImage ? (
                 <ActivityIndicator size="small" color={tintColor} />
               ) : item.imageUrl ? (
@@ -395,7 +405,7 @@ export default function GroceryList() {
                   <Text style={styles.itemImagePlaceholderText}>🛒</Text>
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
             <ThemedText style={styles.itemText}>{item.name}</ThemedText>
             <View style={styles.buttonContainer}>
               <TouchableOpacity
@@ -544,7 +554,7 @@ export default function GroceryList() {
       {/* OpenRouter API Key Modal */}
       <Modal
         animationType="slide"
-        transparent={true}
+        transparent={false}
         visible={isApiKeyModalVisible}
         onRequestClose={() => {
           if (apiKey) {
@@ -552,134 +562,162 @@ export default function GroceryList() {
           }
         }}
       >
-        <View
-          style={{
-            flex: 1,
-            justifyContent: "center",
-            alignItems: "center",
-            backgroundColor: "rgba(0,0,0,0.5)",
-          }}
-        >
-          <View
-            style={{
-              width: "85%",
-              maxHeight: "80%",
-              backgroundColor: "white",
-              borderRadius: 10,
-              padding: 20,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.25,
-              shadowRadius: 4,
-              elevation: 5,
-            }}
-          >
-            <ScrollView showsVerticalScrollIndicator={false}>
+        <View style={{ flex: 1, backgroundColor: "white" }}>
+          <View style={{ flex: 1, padding: 20, paddingTop: 60 }}>
+            <Text
+              style={{
+                fontSize: 22,
+                fontWeight: "bold",
+                marginBottom: 15,
+                textAlign: "center",
+              }}
+            >
+              API Keys Setup
+            </Text>
+
+            <Text
+              style={{
+                marginBottom: 25,
+                textAlign: "center",
+                color: "#666",
+              }}
+            >
+              Enter your API keys to enable health suggestions and item images.
+            </Text>
+
+            <Text
+              style={{
+                marginBottom: 8,
+                fontWeight: "600",
+                fontSize: 16,
+              }}
+            >
+              OpenRouter API Key
+            </Text>
+            <Text style={{ marginBottom: 8, color: "#888", fontSize: 13 }}>
+              For health suggestions
+            </Text>
+            <TextInput
+              style={{
+                width: "100%",
+                height: 50,
+                borderWidth: 1,
+                borderColor: "#ccc",
+                borderRadius: 8,
+                paddingHorizontal: 12,
+                marginBottom: 20,
+                fontSize: 16,
+              }}
+              placeholder="Enter your OpenRouter API key"
+              value={apiKeyInput}
+              onChangeText={setApiKeyInput}
+              secureTextEntry={true}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <Text
+              style={{
+                marginBottom: 8,
+                fontWeight: "600",
+                fontSize: 16,
+              }}
+            >
+              Pexels API Key
+            </Text>
+            <Text style={{ marginBottom: 8, color: "#888", fontSize: 13 }}>
+              For item images
+            </Text>
+            <TextInput
+              style={{
+                width: "100%",
+                height: 50,
+                borderWidth: 1,
+                borderColor: "#ccc",
+                borderRadius: 8,
+                paddingHorizontal: 12,
+                marginBottom: 20,
+                fontSize: 16,
+              }}
+              placeholder="Enter your Pexels API key"
+              value={pexelsApiKeyInput}
+              onChangeText={setPexelsApiKeyInput}
+              secureTextEntry={true}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            {apiKeyError && (
               <Text
                 style={{
-                  fontSize: 18,
-                  fontWeight: "bold",
+                  color: "#FF3B30",
                   marginBottom: 15,
                   textAlign: "center",
                 }}
               >
-                API Keys Setup
+                {apiKeyError}
               </Text>
+            )}
 
+            <TouchableOpacity
+              style={{
+                backgroundColor: "#007AFF",
+                paddingVertical: 15,
+                borderRadius: 10,
+                width: "100%",
+                alignItems: "center",
+                marginTop: 10,
+              }}
+              onPress={saveApiKeys}
+            >
               <Text
-                style={{
-                  marginBottom: 20,
-                  textAlign: "center",
-                }}
+                style={{ color: "white", fontWeight: "bold", fontSize: 17 }}
               >
-                Enter your API keys to enable health suggestions and item
-                images.
+                Save API Keys
               </Text>
+            </TouchableOpacity>
 
-              <Text
-                style={{
-                  alignSelf: "flex-start",
-                  marginBottom: 5,
-                  fontWeight: "600",
-                }}
-              >
-                OpenRouter API Key (for health suggestions)
-              </Text>
-              <TextInput
-                style={{
-                  width: "100%",
-                  height: 50,
-                  borderWidth: 1,
-                  borderColor: "#ccc",
-                  borderRadius: 8,
-                  paddingHorizontal: 10,
-                  marginBottom: 15,
-                }}
-                placeholder="Enter your OpenRouter API key"
-                value={apiKeyInput}
-                onChangeText={setApiKeyInput}
-                secureTextEntry={true}
-              />
-
-              <Text
-                style={{
-                  alignSelf: "flex-start",
-                  marginBottom: 5,
-                  fontWeight: "600",
-                }}
-              >
-                Pexels API Key (for item images)
-              </Text>
-              <TextInput
-                style={{
-                  width: "100%",
-                  height: 50,
-                  borderWidth: 1,
-                  borderColor: "#ccc",
-                  borderRadius: 8,
-                  paddingHorizontal: 10,
-                  marginBottom: 10,
-                }}
-                placeholder="Enter your Pexels API key"
-                value={pexelsApiKeyInput}
-                onChangeText={setPexelsApiKeyInput}
-                secureTextEntry={true}
-              />
-
-              {apiKeyError && (
-                <Text style={{ color: "#FF3B30", marginBottom: 10 }}>
-                  {apiKeyError}
-                </Text>
-              )}
-
+            {apiKey && (
               <TouchableOpacity
-                style={{
-                  backgroundColor: tintColor,
-                  paddingVertical: 12,
-                  paddingHorizontal: 20,
-                  borderRadius: 8,
-                  width: "100%",
-                  alignItems: "center",
-                  marginTop: 10,
-                }}
-                onPress={saveApiKeys}
+                style={{ marginTop: 20, alignItems: "center", padding: 10 }}
+                onPress={() => setIsApiKeyModalVisible(false)}
               >
-                <Text style={{ color: "white", fontWeight: "bold" }}>
-                  Save API Keys
-                </Text>
+                <Text style={{ color: "#007AFF", fontSize: 17 }}>Cancel</Text>
               </TouchableOpacity>
-
-              {apiKey && (
-                <TouchableOpacity
-                  style={{ marginTop: 15 }}
-                  onPress={() => setIsApiKeyModalVisible(false)}
-                >
-                  <Text style={{ color: tintColor }}>Cancel</Text>
-                </TouchableOpacity>
-              )}
-            </ScrollView>
+            )}
           </View>
         </View>
+      </Modal>
+
+      {/* Zoomed Image Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={zoomedImageUrl !== null}
+        onRequestClose={() => setZoomedImageUrl(null)}
+      >
+        <TouchableOpacity
+          style={styles.zoomModalOverlay}
+          activeOpacity={1}
+          onPress={() => setZoomedImageUrl(null)}
+        >
+          <View style={styles.zoomModalContent}>
+            <Text style={styles.zoomModalTitle}>{zoomedImageName}</Text>
+            {zoomedImageUrl && (
+              <Image
+                source={{ uri: zoomedImageUrl }}
+                style={styles.zoomedImage}
+                resizeMode="contain"
+              />
+            )}
+            <TouchableOpacity
+              style={styles.zoomCloseButton}
+              onPress={() => setZoomedImageUrl(null)}
+            >
+              <Text style={styles.zoomCloseButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
       </Modal>
     </View>
   );
@@ -890,5 +928,40 @@ const styles = StyleSheet.create({
   },
   settingsButtonText: {
     fontSize: 24,
+  },
+  zoomModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  zoomModalContent: {
+    width: "90%",
+    maxHeight: "80%",
+    alignItems: "center",
+  },
+  zoomModalTitle: {
+    color: "white",
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 15,
+    textAlign: "center",
+  },
+  zoomedImage: {
+    width: "100%",
+    height: 300,
+    borderRadius: 12,
+  },
+  zoomCloseButton: {
+    marginTop: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    backgroundColor: "#FF3B30",
+    borderRadius: 8,
+  },
+  zoomCloseButtonText: {
+    color: "white",
+    fontWeight: "bold",
+    fontSize: 16,
   },
 });
