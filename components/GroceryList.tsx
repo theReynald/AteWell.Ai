@@ -5,8 +5,10 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Image,
     Keyboard,
     Modal,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
@@ -25,61 +27,136 @@ type GroceryItem = {
   suggestionReason?: string;
   showingSuggestion?: boolean;
   isLoadingSuggestion?: boolean;
+  imageUrl?: string;
+  isLoadingImage?: boolean;
 };
 
-// Storage key for OpenRouter API key
+// Storage keys for API keys
 const HEALTH_API_KEY_STORAGE = "openrouter_api_key";
+const PEXELS_API_KEY_STORAGE = "pexels_api_key";
 
 export default function GroceryList() {
   const [items, setItems] = useState<GroceryItem[]>([]);
   const [inputText, setInputText] = useState("");
   const [editText, setEditText] = useState("");
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [pexelsApiKey, setPexelsApiKey] = useState<string | null>(null);
   const [isApiKeyModalVisible, setIsApiKeyModalVisible] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [pexelsApiKeyInput, setPexelsApiKeyInput] = useState("");
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
   // Use theme colors for text/buttons, but do NOT use backgroundColor for containers
   const textColor = useThemeColor({}, "text");
   const tintColor = useThemeColor({}, "tint");
 
-  // Fetch API key on component mount
+  // Fetch API keys on component mount
   useEffect(() => {
-    const getApiKey = async () => {
+    const getApiKeys = async () => {
       try {
-        // Retrieve the API key from AsyncStorage
+        // Retrieve the API keys from AsyncStorage
         const storedApiKey = await AsyncStorage.getItem(HEALTH_API_KEY_STORAGE);
+        const storedPexelsKey = await AsyncStorage.getItem(
+          PEXELS_API_KEY_STORAGE,
+        );
+
         if (storedApiKey) {
           setApiKey(storedApiKey);
-        } else {
-          // If no API key is stored, show the modal
+        }
+        if (storedPexelsKey) {
+          setPexelsApiKey(storedPexelsKey);
+        }
+
+        if (!storedApiKey || !storedPexelsKey) {
+          // If any API key is missing, show the modal
           setIsApiKeyModalVisible(true);
         }
       } catch (error) {
-        console.error("Error retrieving API key:", error);
-        setApiKeyError("Failed to retrieve API key");
+        console.error("Error retrieving API keys:", error);
+        setApiKeyError("Failed to retrieve API keys");
         setIsApiKeyModalVisible(true);
       }
     };
 
-    getApiKey();
+    getApiKeys();
   }, []);
 
-  // Save API key to AsyncStorage
-  const saveApiKey = async () => {
-    if (apiKeyInput.trim() === "") {
-      setApiKeyError("Please enter a valid API key");
+  // Save API keys to AsyncStorage
+  const saveApiKeys = async () => {
+    if (apiKeyInput.trim() === "" && pexelsApiKeyInput.trim() === "") {
+      setApiKeyError("Please enter at least one API key");
       return;
     }
 
     try {
-      await AsyncStorage.setItem(HEALTH_API_KEY_STORAGE, apiKeyInput);
-      setApiKey(apiKeyInput);
+      if (apiKeyInput.trim() !== "") {
+        await AsyncStorage.setItem(HEALTH_API_KEY_STORAGE, apiKeyInput);
+        setApiKey(apiKeyInput);
+      }
+      if (pexelsApiKeyInput.trim() !== "") {
+        await AsyncStorage.setItem(PEXELS_API_KEY_STORAGE, pexelsApiKeyInput);
+        setPexelsApiKey(pexelsApiKeyInput);
+      }
       setApiKeyError(null);
       setIsApiKeyModalVisible(false);
     } catch (error) {
-      console.error("Error saving API key:", error);
-      setApiKeyError("Failed to save API key");
+      console.error("Error saving API keys:", error);
+      setApiKeyError("Failed to save API keys");
+    }
+  };
+
+  // Function to get image from Pexels API
+  const getItemImage = async (itemId: string, itemName: string) => {
+    if (!pexelsApiKey) {
+      return;
+    }
+
+    // Mark item as loading image
+    setItems((prevItems) =>
+      prevItems.map((item) =>
+        item.id === itemId ? { ...item, isLoadingImage: true } : item,
+      ),
+    );
+
+    try {
+      const response = await fetch(
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(itemName + " food")}&per_page=1`,
+        {
+          headers: {
+            Authorization: pexelsApiKey,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const imageUrl = data.photos?.[0]?.src?.small;
+
+      if (imageUrl) {
+        setItems((prevItems) =>
+          prevItems.map((item) =>
+            item.id === itemId
+              ? { ...item, imageUrl, isLoadingImage: false }
+              : item,
+          ),
+        );
+      } else {
+        setItems((prevItems) =>
+          prevItems.map((item) =>
+            item.id === itemId ? { ...item, isLoadingImage: false } : item,
+          ),
+        );
+      }
+    } catch (error) {
+      console.error("Error getting image:", error);
+      setItems((prevItems) =>
+        prevItems.map((item) =>
+          item.id === itemId ? { ...item, isLoadingImage: false } : item,
+        ),
+      );
     }
   };
 
@@ -175,20 +252,27 @@ export default function GroceryList() {
 
   // Function to replace original item with suggestion
   const replaceFoodItem = (id: string) => {
-    setItems((prevItems) =>
-      prevItems.map((item) => {
-        if (item.id === id && item.healthSuggestion) {
-          return {
-            ...item,
-            name: item.healthSuggestion,
-            healthSuggestion: undefined,
-            suggestionReason: undefined,
-            showingSuggestion: false,
-          };
-        }
-        return item;
-      }),
-    );
+    const item = items.find((i) => i.id === id);
+    if (item?.healthSuggestion) {
+      const newName = item.healthSuggestion;
+      setItems((prevItems) =>
+        prevItems.map((i) => {
+          if (i.id === id && i.healthSuggestion) {
+            return {
+              ...i,
+              name: newName,
+              healthSuggestion: undefined,
+              suggestionReason: undefined,
+              showingSuggestion: false,
+              imageUrl: undefined, // Clear old image
+            };
+          }
+          return i;
+        }),
+      );
+      // Fetch new image for the healthier alternative
+      getItemImage(id, newName);
+    }
   };
 
   // Function to dismiss suggestion
@@ -227,8 +311,9 @@ export default function GroceryList() {
       }
     }, 50);
 
-    // Get health suggestion for the new item
+    // Get health suggestion and image for the new item
     getHealthSuggestion(newItemId, newItemName);
+    getItemImage(newItemId, newItemName);
   };
 
   const deleteItem = (id: string) => {
@@ -296,6 +381,21 @@ export default function GroceryList() {
       ) : (
         <View style={styles.itemContentContainer}>
           <View style={styles.itemTopRow}>
+            {/* Item image */}
+            <View style={styles.itemImageContainer}>
+              {item.isLoadingImage ? (
+                <ActivityIndicator size="small" color={tintColor} />
+              ) : item.imageUrl ? (
+                <Image
+                  source={{ uri: item.imageUrl }}
+                  style={styles.itemImage}
+                />
+              ) : (
+                <View style={styles.itemImagePlaceholder}>
+                  <Text style={styles.itemImagePlaceholderText}>🛒</Text>
+                </View>
+              )}
+            </View>
             <ThemedText style={styles.itemText}>{item.name}</ThemedText>
             <View style={styles.buttonContainer}>
               <TouchableOpacity
@@ -393,6 +493,7 @@ export default function GroceryList() {
           style={styles.settingsButton}
           onPress={() => {
             setApiKeyInput(apiKey || "");
+            setPexelsApiKeyInput(pexelsApiKey || "");
             setApiKeyError(null);
             setIsApiKeyModalVisible(true);
           }}
@@ -461,11 +562,11 @@ export default function GroceryList() {
         >
           <View
             style={{
-              width: "80%",
+              width: "85%",
+              maxHeight: "80%",
               backgroundColor: "white",
               borderRadius: 10,
               padding: 20,
-              alignItems: "center",
               shadowColor: "#000",
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: 0.25,
@@ -473,74 +574,110 @@ export default function GroceryList() {
               elevation: 5,
             }}
           >
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: "bold",
-                marginBottom: 15,
-                textAlign: "center",
-              }}
-            >
-              OpenRouter API Key Required
-            </Text>
-
-            <Text
-              style={{
-                marginBottom: 20,
-                textAlign: "center",
-              }}
-            >
-              To suggest healthier alternatives for your grocery items, please
-              enter your OpenRouter API key.
-            </Text>
-
-            <TextInput
-              style={{
-                width: "100%",
-                height: 50,
-                borderWidth: 1,
-                borderColor: apiKeyError ? "#FF3B30" : "#ccc",
-                borderRadius: 8,
-                paddingHorizontal: 10,
-                marginBottom: 10,
-              }}
-              placeholder="Enter your OpenRouter API key"
-              value={apiKeyInput}
-              onChangeText={setApiKeyInput}
-              secureTextEntry={true}
-            />
-
-            {apiKeyError && (
-              <Text style={{ color: "#FF3B30", marginBottom: 10 }}>
-                {apiKeyError}
-              </Text>
-            )}
-
-            <TouchableOpacity
-              style={{
-                backgroundColor: tintColor,
-                paddingVertical: 12,
-                paddingHorizontal: 20,
-                borderRadius: 8,
-                width: "100%",
-                alignItems: "center",
-                marginTop: 10,
-              }}
-              onPress={saveApiKey}
-            >
-              <Text style={{ color: "white", fontWeight: "bold" }}>
-                Save API Key
-              </Text>
-            </TouchableOpacity>
-
-            {apiKey && (
-              <TouchableOpacity
-                style={{ marginTop: 15 }}
-                onPress={() => setIsApiKeyModalVisible(false)}
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text
+                style={{
+                  fontSize: 18,
+                  fontWeight: "bold",
+                  marginBottom: 15,
+                  textAlign: "center",
+                }}
               >
-                <Text style={{ color: tintColor }}>Cancel</Text>
+                API Keys Setup
+              </Text>
+
+              <Text
+                style={{
+                  marginBottom: 20,
+                  textAlign: "center",
+                }}
+              >
+                Enter your API keys to enable health suggestions and item
+                images.
+              </Text>
+
+              <Text
+                style={{
+                  alignSelf: "flex-start",
+                  marginBottom: 5,
+                  fontWeight: "600",
+                }}
+              >
+                OpenRouter API Key (for health suggestions)
+              </Text>
+              <TextInput
+                style={{
+                  width: "100%",
+                  height: 50,
+                  borderWidth: 1,
+                  borderColor: "#ccc",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  marginBottom: 15,
+                }}
+                placeholder="Enter your OpenRouter API key"
+                value={apiKeyInput}
+                onChangeText={setApiKeyInput}
+                secureTextEntry={true}
+              />
+
+              <Text
+                style={{
+                  alignSelf: "flex-start",
+                  marginBottom: 5,
+                  fontWeight: "600",
+                }}
+              >
+                Pexels API Key (for item images)
+              </Text>
+              <TextInput
+                style={{
+                  width: "100%",
+                  height: 50,
+                  borderWidth: 1,
+                  borderColor: "#ccc",
+                  borderRadius: 8,
+                  paddingHorizontal: 10,
+                  marginBottom: 10,
+                }}
+                placeholder="Enter your Pexels API key"
+                value={pexelsApiKeyInput}
+                onChangeText={setPexelsApiKeyInput}
+                secureTextEntry={true}
+              />
+
+              {apiKeyError && (
+                <Text style={{ color: "#FF3B30", marginBottom: 10 }}>
+                  {apiKeyError}
+                </Text>
+              )}
+
+              <TouchableOpacity
+                style={{
+                  backgroundColor: tintColor,
+                  paddingVertical: 12,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                  width: "100%",
+                  alignItems: "center",
+                  marginTop: 10,
+                }}
+                onPress={saveApiKeys}
+              >
+                <Text style={{ color: "white", fontWeight: "bold" }}>
+                  Save API Keys
+                </Text>
               </TouchableOpacity>
-            )}
+
+              {apiKey && (
+                <TouchableOpacity
+                  style={{ marginTop: 15 }}
+                  onPress={() => setIsApiKeyModalVisible(false)}
+                >
+                  <Text style={{ color: tintColor }}>Cancel</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -612,6 +749,32 @@ const styles = StyleSheet.create({
   itemText: {
     flex: 1,
     fontSize: 16,
+    marginLeft: 10,
+  },
+  itemImageContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    overflow: "hidden",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f0f0f0",
+  },
+  itemImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+  },
+  itemImagePlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 8,
+    backgroundColor: "#e0e0e0",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  itemImagePlaceholderText: {
+    fontSize: 24,
   },
   buttonContainer: {
     flexDirection: "row",
