@@ -28,7 +28,7 @@ type GroceryItem = {
 };
 
 // Storage key for OpenRouter API key
-const API_KEY_STORAGE = 'openrouter_api_key';
+const HEALTH_API_KEY_STORAGE = 'openrouter_api_key';
 
 export default function GroceryList() {
     const [items, setItems] = useState<GroceryItem[]>([]);
@@ -47,7 +47,8 @@ export default function GroceryList() {
     useEffect(() => {
         const getApiKey = async () => {
             try {
-                const storedApiKey = await AsyncStorage.getItem(API_KEY_STORAGE);
+                // Retrieve the API key from AsyncStorage
+                const storedApiKey = await AsyncStorage.getItem(HEALTH_API_KEY_STORAGE);
                 if (storedApiKey) {
                     setApiKey(storedApiKey);
                 } else {
@@ -72,7 +73,7 @@ export default function GroceryList() {
         }
 
         try {
-            await AsyncStorage.setItem(API_KEY_STORAGE, apiKeyInput);
+            await AsyncStorage.setItem(HEALTH_API_KEY_STORAGE, apiKeyInput);
             setApiKey(apiKeyInput);
             setApiKeyError(null);
             setIsApiKeyModalVisible(false);
@@ -126,7 +127,7 @@ export default function GroceryList() {
             }
 
             const data = await response.json();
-            const suggestion = data.choices[0]?.message?.content;
+            const suggestion = data.choices?.[0]?.message?.content;
 
             if (suggestion) {
                 // Parse the suggestion into alternative and reason
@@ -358,7 +359,19 @@ export default function GroceryList() {
             <View style={styles.spacer} />
 
             {/* Title at the top for visibility */}
-            <ThemedText type="title" style={styles.headerTitle}>Grocery List</ThemedText>
+            <View style={styles.headerRow}>
+                <ThemedText type="title" style={styles.headerTitle}>AteWell.AI 🍽️💡</ThemedText>
+                <TouchableOpacity
+                    style={styles.settingsButton}
+                    onPress={() => {
+                        setApiKeyInput(apiKey || '');
+                        setApiKeyError(null);
+                        setIsApiKeyModalVisible(true);
+                    }}
+                >
+                    <Text style={styles.settingsButtonText}>⚙️</Text>
+                </TouchableOpacity>
+            </View>
 
             <View style={styles.inputContainer}>
                 <TextInput
@@ -661,5 +674,19 @@ const styles = StyleSheet.create({
         fontSize: 24,
         fontWeight: 'bold',
         color: '#2089dc', // A nice blue color that should stand out
+    },
+    headerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 5,
+    },
+    settingsButton: {
+        position: 'absolute',
+        right: 0,
+        padding: 8,
+    },
+    settingsButtonText: {
+        fontSize: 24,
     },
 });
