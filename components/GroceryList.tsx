@@ -1,5 +1,12 @@
+import { API_BASE_URL, SUPABASE_ANON_KEY } from "@/constants/Api";
+import { useGrocery } from "@/contexts/GroceryContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { GroceryItem } from "@/types/grocery";
+import {
+    getNovaGroupColor,
+    getNovaGroupLabel,
+    getNutriscoreColor,
+} from "@/utils/openFoodFacts";
 import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
@@ -13,162 +20,28 @@ import {
     TextInput,
     TouchableOpacity,
     TouchableWithoutFeedback,
-    View
+    View,
 } from "react-native";
 import { ThemedText } from "./ThemedText";
 import { ThemedView } from "./ThemedView";
 
-type GroceryItem = {
-  id: string;
-  name: string;
-  isEditing: boolean;
-  healthSuggestion?: string;
-  suggestionReason?: string;
-  showingSuggestion?: boolean;
-  isLoadingSuggestion?: boolean;
-  imageUrl?: string;
-  isLoadingImage?: boolean;
-};
-
-// Storage keys for API keys
-const HEALTH_API_KEY_STORAGE = "openrouter_api_key";
-const PEXELS_API_KEY_STORAGE = "pexels_api_key";
-
 export default function GroceryList() {
   const [items, setItems] = useState<GroceryItem[]>([]);
+  const { pendingItems, consumePendingItems } = useGrocery();
   const [inputText, setInputText] = useState("");
   const [editText, setEditText] = useState("");
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [pexelsApiKey, setPexelsApiKey] = useState<string | null>(null);
-  const [isApiKeyModalVisible, setIsApiKeyModalVisible] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [pexelsApiKeyInput, setPexelsApiKeyInput] = useState("");
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [zoomedImageUrl, setZoomedImageUrl] = useState<string | null>(null);
   const [zoomedImageName, setZoomedImageName] = useState<string>("");
 
-  // Use theme colors for text/buttons, but do NOT use backgroundColor for containers
   const textColor = useThemeColor({}, "text");
   const tintColor = useThemeColor({}, "tint");
 
-  // Fetch API keys on component mount
-  useEffect(() => {
-    const getApiKeys = async () => {
-      try {
-        // Retrieve the API keys from AsyncStorage
-        const storedApiKey = await AsyncStorage.getItem(HEALTH_API_KEY_STORAGE);
-        const storedPexelsKey = await AsyncStorage.getItem(
-          PEXELS_API_KEY_STORAGE,
-        );
-
-        if (storedApiKey) {
-          setApiKey(storedApiKey);
-        }
-        if (storedPexelsKey) {
-          setPexelsApiKey(storedPexelsKey);
-        }
-
-        if (!storedApiKey || !storedPexelsKey) {
-          // If any API key is missing, show the modal
-          setIsApiKeyModalVisible(true);
-        }
-      } catch (error) {
-        console.error("Error retrieving API keys:", error);
-        setApiKeyError("Failed to retrieve API keys");
-        setIsApiKeyModalVisible(true);
-      }
-    };
-
-    getApiKeys();
-  }, []);
-
-  // Save API keys to AsyncStorage
-  const saveApiKeys = async () => {
-    if (apiKeyInput.trim() === "" && pexelsApiKeyInput.trim() === "") {
-      setApiKeyError("Please enter at least one API key");
-      return;
-    }
-
-    try {
-      if (apiKeyInput.trim() !== "") {
-        await AsyncStorage.setItem(HEALTH_API_KEY_STORAGE, apiKeyInput);
-        setApiKey(apiKeyInput);
-      }
-      if (pexelsApiKeyInput.trim() !== "") {
-        await AsyncStorage.setItem(PEXELS_API_KEY_STORAGE, pexelsApiKeyInput);
-        setPexelsApiKey(pexelsApiKeyInput);
-      }
-      setApiKeyError(null);
-      setIsApiKeyModalVisible(false);
-    } catch (error) {
-      console.error("Error saving API keys:", error);
-      setApiKeyError("Failed to save API keys");
-    }
-  };
-
-  // Function to get image from Pexels API
-  const getItemImage = async (itemId: string, itemName: string) => {
-    if (!pexelsApiKey) {
-      return;
-    }
-
-    // Mark item as loading image
-    setItems((prevItems) =>
-      prevItems.map((item) =>
-        item.id === itemId ? { ...item, isLoadingImage: true } : item,
-      ),
-    );
-
-    try {
-      const response = await fetch(
-        `https://api.pexels.com/v1/search?query=${encodeURIComponent(itemName + " food")}&per_page=1`,
-        {
-          headers: {
-            Authorization: pexelsApiKey,
-          },
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const imageUrl = data.photos?.[0]?.src?.small;
-
-      if (imageUrl) {
-        setItems((prevItems) =>
-          prevItems.map((item) =>
-            item.id === itemId
-              ? { ...item, imageUrl, isLoadingImage: false }
-              : item,
-          ),
-        );
-      } else {
-        setItems((prevItems) =>
-          prevItems.map((item) =>
-            item.id === itemId ? { ...item, isLoadingImage: false } : item,
-          ),
-        );
-      }
-    } catch (error) {
-      console.error("Error getting image:", error);
-      setItems((prevItems) =>
-        prevItems.map((item) =>
-          item.id === itemId ? { ...item, isLoadingImage: false } : item,
-        ),
-      );
-    }
-  };
-
-  // Function to get health suggestion from OpenRouter API
-  const getHealthSuggestion = async (itemId: string, itemName: string) => {
-    // Check if we have an API key first
-    if (!apiKey) {
-      setIsApiKeyModalVisible(true);
-      return;
-    }
-
+  // Function to get health suggestion from backend proxy
+  const getHealthSuggestion = async (
+    itemId: string,
+    itemName: string,
+    nutritionInfo?: string,
+  ) => {
     // Mark item as loading suggestion
     setItems((prevItems) =>
       prevItems.map((item) =>
@@ -177,57 +50,43 @@ export default function GroceryList() {
     );
 
     try {
-      const response = await fetch(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-            "HTTP-Referer": "https://grocerylistapp.example.com", // Replace with your domain
-            "X-Title": "Grocery List App",
-          },
-          body: JSON.stringify({
-            model: "openai/gpt-4o",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a nutrition expert that provides brief, helpful suggestions for healthier food alternatives. Format your response with the alternative on the first line and the explanation on the second line.",
-              },
-              {
-                role: "user",
-                content: `Suggest a healthier grocery alternative for "${itemName}" and explain why it's healthier in one sentence.`,
-              },
-            ],
-          }),
-        },
-      );
+      // Dev: localhost:3000/api/health-suggestion
+      // Prod: <supabase>/functions/v1/health-suggestion
+      const endpoint = __DEV__
+        ? `${API_BASE_URL}/api/health-suggestion`
+        : `${API_BASE_URL}/health-suggestion`;
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      // Supabase Edge Functions require the anon key in production
+      if (!__DEV__ && SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.startsWith("YOUR")) {
+        headers["Authorization"] = `Bearer ${SUPABASE_ANON_KEY}`;
+      }
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          itemName,
+          nutritionContext: nutritionInfo,
+        }),
+      });
 
       if (!response.ok) {
         throw new Error(`Error: ${response.status}`);
       }
 
       const data = await response.json();
-      const suggestion = data.choices?.[0]?.message?.content;
 
-      if (suggestion) {
-        // Parse the suggestion into alternative and reason
-        const lines = suggestion
-          .split("\n")
-          .filter((line) => line.trim() !== "");
-        const healthSuggestion = lines[0]?.trim();
-        const suggestionReason =
-          lines.length > 1 ? lines.slice(1).join(" ").trim() : "";
-
-        // Update the item with the suggestion
+      if (data.healthSuggestion) {
         setItems((prevItems) =>
           prevItems.map((item) =>
             item.id === itemId
               ? {
                   ...item,
-                  healthSuggestion,
-                  suggestionReason,
+                  healthSuggestion: data.healthSuggestion,
+                  suggestionReason: data.suggestionReason || "",
                   showingSuggestion: true,
                   isLoadingSuggestion: false,
                 }
@@ -237,12 +96,7 @@ export default function GroceryList() {
       }
     } catch (error) {
       console.error("Error getting health suggestion:", error);
-      Alert.alert(
-        "Error",
-        "Failed to get health suggestion. Please try again.",
-      );
-
-      // Reset loading state
+      // Silently fail — don't block the user with an alert
       setItems((prevItems) =>
         prevItems.map((item) =>
           item.id === itemId ? { ...item, isLoadingSuggestion: false } : item,
@@ -255,7 +109,14 @@ export default function GroceryList() {
   const replaceFoodItem = (id: string) => {
     const item = items.find((i) => i.id === id);
     if (item?.healthSuggestion) {
-      const newName = item.healthSuggestion;
+      // Clean the suggestion text for use as the item name
+      const newName = item.healthSuggestion
+        .replace(/\*\*/g, "")
+        .replace(/[#*_~`>]/g, "")
+        .replace(/^\d+[\.\)]\s*/, "")
+        .trim()
+        .split("\n")[0];
+
       setItems((prevItems) =>
         prevItems.map((i) => {
           if (i.id === id && i.healthSuggestion) {
@@ -265,14 +126,12 @@ export default function GroceryList() {
               healthSuggestion: undefined,
               suggestionReason: undefined,
               showingSuggestion: false,
-              imageUrl: undefined, // Clear old image
+              imageUrl: undefined,
             };
           }
           return i;
         }),
       );
-      // Fetch new image for the healthier alternative
-      getItemImage(id, newName);
     }
   };
 
@@ -280,15 +139,54 @@ export default function GroceryList() {
   const dismissSuggestion = (id: string) => {
     setItems((prevItems) =>
       prevItems.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              showingSuggestion: false,
-            }
-          : item,
+        item.id === id ? { ...item, showingSuggestion: false } : item,
       ),
     );
   };
+
+  // Build nutrition context string from scanned product data
+  const buildNutritionContext = (item: GroceryItem): string | undefined => {
+    if (!item.nutritionData) return undefined;
+    const nd = item.nutritionData;
+    const parts: string[] = [];
+    if (nd.nutriscore_grade)
+      parts.push(`Nutri-Score: ${nd.nutriscore_grade.toUpperCase()}`);
+    if (nd.nova_group)
+      parts.push(
+        `NOVA group: ${nd.nova_group} (${getNovaGroupLabel(nd.nova_group)})`,
+      );
+    if (nd.calories_per_100g != null)
+      parts.push(
+        `Calories: ${Math.round(nd.calories_per_100g)} kcal/100g`,
+      );
+    if (nd.proteins_per_100g != null)
+      parts.push(`Protein: ${nd.proteins_per_100g.toFixed(1)}g/100g`);
+    if (nd.fat_per_100g != null)
+      parts.push(`Fat: ${nd.fat_per_100g.toFixed(1)}g/100g`);
+    if (nd.sugars_per_100g != null)
+      parts.push(`Sugars: ${nd.sugars_per_100g.toFixed(1)}g/100g`);
+    if (nd.salt_per_100g != null)
+      parts.push(`Salt: ${nd.salt_per_100g.toFixed(1)}g/100g`);
+    if (nd.fiber_per_100g != null)
+      parts.push(`Fiber: ${nd.fiber_per_100g.toFixed(1)}g/100g`);
+    if (nd.ingredients_text)
+      parts.push(
+        `Ingredients: ${nd.ingredients_text.substring(0, 200)}`,
+      );
+    return parts.length > 0 ? parts.join("\n") : undefined;
+  };
+
+  // Pick up items added from the barcode scanner tab
+  useEffect(() => {
+    if (pendingItems.length === 0) return;
+    const newItems = consumePendingItems();
+    setItems((prev) => [...prev, ...newItems]);
+    // Trigger health suggestions for scanned items
+    newItems.forEach((item) => {
+      const nutritionContext = buildNutritionContext(item);
+      getHealthSuggestion(item.id, item.name, nutritionContext);
+    });
+  }, [pendingItems]);
 
   const addItem = () => {
     if (inputText.trim() === "") return;
@@ -296,7 +194,7 @@ export default function GroceryList() {
     const newItemId = Date.now().toString();
     const newItemName = inputText.trim();
 
-    const newItem = {
+    const newItem: GroceryItem = {
       id: newItemId,
       name: newItemName,
       isEditing: false,
@@ -312,17 +210,13 @@ export default function GroceryList() {
       }
     }, 50);
 
-    // Get health suggestion and image for the new item
+    // Get health suggestion for the new item
     getHealthSuggestion(newItemId, newItemName);
-    getItemImage(newItemId, newItemName);
   };
 
   const deleteItem = (id: string) => {
     Alert.alert("Delete Item", "Are you sure you want to delete this item?", [
-      {
-        text: "Cancel",
-        style: "cancel",
-      },
+      { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
         style: "destructive",
@@ -359,6 +253,67 @@ export default function GroceryList() {
     Keyboard.dismiss();
   };
 
+  // Get the emoji icon for a food item
+  const getFoodEmoji = (name: string): string => {
+    const lower = name.toLowerCase();
+    if (lower.includes("apple")) return "🍎";
+    if (lower.includes("banana")) return "🍌";
+    if (lower.includes("bread")) return "🍞";
+    if (lower.includes("milk")) return "🥛";
+    if (lower.includes("egg")) return "🥚";
+    if (lower.includes("chicken")) return "🍗";
+    if (lower.includes("rice")) return "🍚";
+    if (lower.includes("fish") || lower.includes("salmon") || lower.includes("tuna")) return "🐟";
+    if (lower.includes("cheese")) return "🧀";
+    if (lower.includes("tomato")) return "🍅";
+    if (lower.includes("carrot")) return "🥕";
+    if (lower.includes("broccoli")) return "🥦";
+    if (lower.includes("potato")) return "🥔";
+    if (lower.includes("corn")) return "🌽";
+    if (lower.includes("pepper")) return "🌶️";
+    if (lower.includes("lettuce") || lower.includes("salad")) return "🥬";
+    if (lower.includes("avocado")) return "🥑";
+    if (lower.includes("orange")) return "🍊";
+    if (lower.includes("grape")) return "🍇";
+    if (lower.includes("strawberry") || lower.includes("berry")) return "🍓";
+    if (lower.includes("watermelon") || lower.includes("melon")) return "🍉";
+    if (lower.includes("pineapple")) return "🍍";
+    if (lower.includes("lemon")) return "🍋";
+    if (lower.includes("peach")) return "🍑";
+    if (lower.includes("meat") || lower.includes("beef") || lower.includes("steak")) return "🥩";
+    if (lower.includes("pork") || lower.includes("bacon")) return "🥓";
+    if (lower.includes("shrimp") || lower.includes("prawn")) return "🦐";
+    if (lower.includes("pasta") || lower.includes("spaghetti") || lower.includes("noodle")) return "🍝";
+    if (lower.includes("pizza")) return "🍕";
+    if (lower.includes("burger")) return "🍔";
+    if (lower.includes("sandwich")) return "🥪";
+    if (lower.includes("taco")) return "🌮";
+    if (lower.includes("soup")) return "🍲";
+    if (lower.includes("cookie") || lower.includes("biscuit")) return "🍪";
+    if (lower.includes("cake")) return "🎂";
+    if (lower.includes("chocolate")) return "🍫";
+    if (lower.includes("ice cream")) return "🍦";
+    if (lower.includes("coffee")) return "☕";
+    if (lower.includes("tea")) return "🍵";
+    if (lower.includes("juice") || lower.includes("smoothie")) return "🧃";
+    if (lower.includes("water")) return "💧";
+    if (lower.includes("wine")) return "🍷";
+    if (lower.includes("beer")) return "🍺";
+    if (lower.includes("cereal") || lower.includes("oat") || lower.includes("granola")) return "🥣";
+    if (lower.includes("yogurt") || lower.includes("yoghurt")) return "🥛";
+    if (lower.includes("butter") || lower.includes("oil")) return "🧈";
+    if (lower.includes("honey")) return "🍯";
+    if (lower.includes("nut") || lower.includes("almond") || lower.includes("walnut") || lower.includes("peanut")) return "🥜";
+    if (lower.includes("mushroom")) return "🍄";
+    if (lower.includes("onion") || lower.includes("garlic")) return "🧅";
+    if (lower.includes("cucumber")) return "🥒";
+    if (lower.includes("eggplant") || lower.includes("aubergine")) return "🍆";
+    if (lower.includes("bean") || lower.includes("lentil")) return "🫘";
+    if (lower.includes("tofu") || lower.includes("soy")) return "🧊";
+    if (lower.includes("quinoa") || lower.includes("grain")) return "🌾";
+    return "🛒";
+  };
+
   const renderItem = ({ item }: { item: GroceryItem }) => (
     <ThemedView style={styles.itemContainer}>
       {item.isEditing ? (
@@ -382,27 +337,27 @@ export default function GroceryList() {
       ) : (
         <View style={styles.itemContentContainer}>
           <View style={styles.itemTopRow}>
-            {/* Item image */}
+            {/* Item image or emoji */}
             <TouchableOpacity
               style={styles.itemImageContainer}
               onPress={() => {
-                if (item.imageUrl) {
-                  setZoomedImageUrl(item.imageUrl);
+                if (item.imageUrl || item.scannedProductImage) {
+                  setZoomedImageUrl(item.imageUrl || item.scannedProductImage || null);
                   setZoomedImageName(item.name);
                 }
               }}
-              disabled={!item.imageUrl}
+              disabled={!item.imageUrl && !item.scannedProductImage}
             >
-              {item.isLoadingImage ? (
-                <ActivityIndicator size="small" color={tintColor} />
-              ) : item.imageUrl ? (
+              {item.imageUrl || item.scannedProductImage ? (
                 <Image
-                  source={{ uri: item.imageUrl }}
+                  source={{ uri: item.imageUrl || item.scannedProductImage }}
                   style={styles.itemImage}
                 />
               ) : (
                 <View style={styles.itemImagePlaceholder}>
-                  <Text style={styles.itemImagePlaceholderText}>🛒</Text>
+                  <Text style={styles.itemImagePlaceholderText}>
+                    {getFoodEmoji(item.name)}
+                  </Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -422,6 +377,62 @@ export default function GroceryList() {
               </TouchableOpacity>
             </View>
           </View>
+
+          {/* Nutrition badges for scanned items */}
+          {item.nutritionData && (
+            <View style={styles.nutritionBadgeRow}>
+              {item.brand && (
+                <Text style={styles.brandText}>{item.brand}</Text>
+              )}
+              <View style={styles.badgeRow}>
+                {item.nutritionData.nutriscore_grade && (
+                  <View
+                    style={[
+                      styles.badge,
+                      {
+                        backgroundColor: getNutriscoreColor(
+                          item.nutritionData.nutriscore_grade,
+                        ),
+                      },
+                    ]}
+                  >
+                    <Text style={styles.badgeText}>
+                      Nutri-Score{" "}
+                      {item.nutritionData.nutriscore_grade.toUpperCase()}
+                    </Text>
+                  </View>
+                )}
+                {item.nutritionData.nova_group && (
+                  <View
+                    style={[
+                      styles.badge,
+                      {
+                        backgroundColor: getNovaGroupColor(
+                          item.nutritionData.nova_group,
+                        ),
+                      },
+                    ]}
+                  >
+                    <Text style={styles.badgeText}>
+                      NOVA {item.nutritionData.nova_group}
+                    </Text>
+                  </View>
+                )}
+                {item.nutritionData.calories_per_100g != null && (
+                  <View style={[styles.badge, { backgroundColor: "#666" }]}>
+                    <Text style={styles.badgeText}>
+                      {Math.round(item.nutritionData.calories_per_100g)} kcal
+                    </Text>
+                  </View>
+                )}
+              </View>
+              {item.barcode && (
+                <Text style={styles.barcodeLabel}>
+                  Barcode: {item.barcode}
+                </Text>
+              )}
+            </View>
+          )}
 
           {/* Health suggestion area */}
           {item.isLoadingSuggestion && (
@@ -453,19 +464,19 @@ export default function GroceryList() {
                   style={[
                     styles.suggestionButton,
                     { backgroundColor: "#4CD964" },
-                  ]} // Green color
+                  ]}
                   onPress={() => replaceFoodItem(item.id)}
                 >
-                  <Text style={styles.buttonText}>✅ Replace Original</Text>
+                  <Text style={styles.buttonText}>✅ Replace</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[
                     styles.suggestionButton,
                     { backgroundColor: "#8E8E93" },
-                  ]} // Gray color
+                  ]}
                   onPress={() => dismissSuggestion(item.id)}
                 >
-                  <Text style={styles.buttonText}>❌ Keep Original</Text>
+                  <Text style={styles.buttonText}>❌ Keep</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -479,7 +490,6 @@ export default function GroceryList() {
   const [inputRef, setInputRef] = useState<TextInput | null>(null);
 
   useEffect(() => {
-    // Small delay to ensure the component is fully rendered
     const timer = setTimeout(() => {
       if (inputRef) {
         inputRef.focus();
@@ -491,25 +501,12 @@ export default function GroceryList() {
 
   return (
     <View style={styles.container}>
-      {/* Add top padding to avoid status bar */}
       <View style={styles.spacer} />
 
-      {/* Title at the top for visibility */}
       <View style={styles.headerRow}>
         <ThemedText type="title" style={styles.headerTitle}>
           AteWell.AI 🍽️💡
         </ThemedText>
-        <TouchableOpacity
-          style={styles.settingsButton}
-          onPress={() => {
-            setApiKeyInput(apiKey || "");
-            setPexelsApiKeyInput(pexelsApiKey || "");
-            setApiKeyError(null);
-            setIsApiKeyModalVisible(true);
-          }}
-        >
-          <Text style={styles.settingsButtonText}>⚙️</Text>
-        </TouchableOpacity>
       </View>
 
       <View style={styles.inputContainer}>
@@ -534,7 +531,6 @@ export default function GroceryList() {
         </TouchableOpacity>
       </View>
 
-      {/* List area can be tapped to dismiss keyboard */}
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View style={styles.listContainer}>
           <FlatList
@@ -550,144 +546,6 @@ export default function GroceryList() {
           />
         </View>
       </TouchableWithoutFeedback>
-
-      {/* OpenRouter API Key Modal */}
-      <Modal
-        animationType="slide"
-        transparent={false}
-        visible={isApiKeyModalVisible}
-        onRequestClose={() => {
-          if (apiKey) {
-            setIsApiKeyModalVisible(false);
-          }
-        }}
-      >
-        <View style={{ flex: 1, backgroundColor: "white" }}>
-          <View style={{ flex: 1, padding: 20, paddingTop: 60 }}>
-            <Text
-              style={{
-                fontSize: 22,
-                fontWeight: "bold",
-                marginBottom: 15,
-                textAlign: "center",
-              }}
-            >
-              API Keys Setup
-            </Text>
-
-            <Text
-              style={{
-                marginBottom: 25,
-                textAlign: "center",
-                color: "#666",
-              }}
-            >
-              Enter your API keys to enable health suggestions and item images.
-            </Text>
-
-            <Text
-              style={{
-                marginBottom: 8,
-                fontWeight: "600",
-                fontSize: 16,
-              }}
-            >
-              OpenRouter API Key
-            </Text>
-            <Text style={{ marginBottom: 8, color: "#888", fontSize: 13 }}>
-              For health suggestions
-            </Text>
-            <TextInput
-              style={{
-                width: "100%",
-                height: 50,
-                borderWidth: 1,
-                borderColor: "#ccc",
-                borderRadius: 8,
-                paddingHorizontal: 12,
-                marginBottom: 20,
-                fontSize: 16,
-              }}
-              placeholder="Enter your OpenRouter API key"
-              value={apiKeyInput}
-              onChangeText={setApiKeyInput}
-              secureTextEntry={true}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            <Text
-              style={{
-                marginBottom: 8,
-                fontWeight: "600",
-                fontSize: 16,
-              }}
-            >
-              Pexels API Key
-            </Text>
-            <Text style={{ marginBottom: 8, color: "#888", fontSize: 13 }}>
-              For item images
-            </Text>
-            <TextInput
-              style={{
-                width: "100%",
-                height: 50,
-                borderWidth: 1,
-                borderColor: "#ccc",
-                borderRadius: 8,
-                paddingHorizontal: 12,
-                marginBottom: 20,
-                fontSize: 16,
-              }}
-              placeholder="Enter your Pexels API key"
-              value={pexelsApiKeyInput}
-              onChangeText={setPexelsApiKeyInput}
-              secureTextEntry={true}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-
-            {apiKeyError && (
-              <Text
-                style={{
-                  color: "#FF3B30",
-                  marginBottom: 15,
-                  textAlign: "center",
-                }}
-              >
-                {apiKeyError}
-              </Text>
-            )}
-
-            <TouchableOpacity
-              style={{
-                backgroundColor: "#007AFF",
-                paddingVertical: 15,
-                borderRadius: 10,
-                width: "100%",
-                alignItems: "center",
-                marginTop: 10,
-              }}
-              onPress={saveApiKeys}
-            >
-              <Text
-                style={{ color: "white", fontWeight: "bold", fontSize: 17 }}
-              >
-                Save API Keys
-              </Text>
-            </TouchableOpacity>
-
-            {apiKey && (
-              <TouchableOpacity
-                style={{ marginTop: 20, alignItems: "center", padding: 10 }}
-                onPress={() => setIsApiKeyModalVisible(false)}
-              >
-                <Text style={{ color: "#007AFF", fontSize: 17 }}>Cancel</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      </Modal>
 
       {/* Zoomed Image Modal */}
       <Modal
@@ -727,10 +585,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 20,
-    backgroundColor: "transparent", // Must be transparent for gradient to show
+    backgroundColor: "transparent",
   },
   spacer: {
-    height: 40, // Add safe area at the top for status bar
+    height: 40,
   },
   title: {
     marginBottom: 20,
@@ -767,7 +625,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   itemContainer: {
-    flexDirection: "column", // Changed to column for suggestions
+    flexDirection: "column",
     padding: 15,
     borderRadius: 8,
     marginBottom: 10,
@@ -846,7 +704,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#888",
   },
-  // Suggestion styles
   suggestionLoading: {
     flexDirection: "row",
     alignItems: "center",
@@ -862,11 +719,11 @@ const styles = StyleSheet.create({
   },
   suggestionContainer: {
     marginTop: 10,
-    backgroundColor: "#f0f8ff", // Light blue background
+    backgroundColor: "#f0f8ff",
     borderRadius: 6,
     padding: 10,
     borderLeftWidth: 3,
-    borderLeftColor: "#4CD964", // Green border
+    borderLeftColor: "#4CD964",
   },
   suggestionContent: {
     marginBottom: 8,
@@ -899,35 +756,19 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginHorizontal: 4,
   },
-  bottomTitle: {
-    marginTop: 20,
-    marginBottom: 10,
-    textAlign: "center",
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#2089dc", // A nice blue color that should stand out
-  },
   headerTitle: {
     marginTop: 10,
     marginBottom: 15,
     textAlign: "center",
     fontSize: 24,
     fontWeight: "bold",
-    color: "#2089dc", // A nice blue color that should stand out
+    color: "#2089dc",
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 5,
-  },
-  settingsButton: {
-    position: "absolute",
-    right: 0,
-    padding: 8,
-  },
-  settingsButtonText: {
-    fontSize: 24,
   },
   zoomModalOverlay: {
     flex: 1,
@@ -963,5 +804,37 @@ const styles = StyleSheet.create({
     color: "white",
     fontWeight: "bold",
     fontSize: 16,
+  },
+  nutritionBadgeRow: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#eee",
+  },
+  brandText: {
+    fontSize: 13,
+    color: "#888",
+    marginBottom: 6,
+    fontStyle: "italic",
+  },
+  badgeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  badge: {
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  badgeText: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  barcodeLabel: {
+    fontSize: 11,
+    color: "#aaa",
+    marginTop: 6,
   },
 });
