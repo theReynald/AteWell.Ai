@@ -3,7 +3,7 @@
     "name": "GroceryTrackerApp",
     "slug": "GroceryTrackerApp",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "grocerytrackerapp",
     "userInterfaceStyle": "automatic",
@@ -41,7 +41,8 @@
         {
           "cameraPermission": "Allow AteWell.AI to access your camera to scan product barcodes."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true

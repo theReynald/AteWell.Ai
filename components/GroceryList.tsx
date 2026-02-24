@@ -1,40 +1,218 @@
 import { API_BASE_URL, SUPABASE_ANON_KEY } from "@/constants/Api";
+import { useAuth } from "@/contexts/AuthContext";
 import { useGrocery } from "@/contexts/GroceryContext";
 import { useThemeColor } from "@/hooks/useThemeColor";
+import { supabase } from "@/lib/supabase";
 import { GroceryItem } from "@/types/grocery";
 import {
     getNovaGroupColor,
     getNovaGroupLabel,
     getNutriscoreColor,
 } from "@/utils/openFoodFacts";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
+    Animated,
     FlatList,
     Image,
     Keyboard,
     Modal,
+    RefreshControl,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    TouchableWithoutFeedback,
     View,
 } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
 import { ThemedText } from "./ThemedText";
 import { ThemedView } from "./ThemedView";
+
+const PEXELS_API_KEY = process.env.EXPO_PUBLIC_PEXELS_API_KEY;
 
 export default function GroceryList() {
   const [items, setItems] = useState<GroceryItem[]>([]);
   const { pendingItems, consumePendingItems } = useGrocery();
+  const { user, signOut } = useAuth();
   const [inputText, setInputText] = useState("");
   const [editText, setEditText] = useState("");
   const [zoomedImageUrl, setZoomedImageUrl] = useState<string | null>(null);
   const [zoomedImageName, setZoomedImageName] = useState<string>("");
+  const [isLoadingItems, setIsLoadingItems] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const textColor = useThemeColor({}, "text");
   const tintColor = useThemeColor({}, "tint");
+
+  // ─── Database helpers ───
+
+  // Convert DB row → GroceryItem
+  const rowToItem = (row: any): GroceryItem => ({
+    id: row.id,
+    name: row.name,
+    isEditing: false,
+    barcode: row.barcode ?? undefined,
+    brand: row.brand ?? undefined,
+    healthSuggestion: row.health_suggestion ?? undefined,
+    suggestionReason: row.suggestion_reason ?? undefined,
+    showingSuggestion: !!(row.health_suggestion),
+    imageUrl: row.image_url ?? undefined,
+    suggestionImageUrl: undefined,
+    isLoadingSuggestionImage: false,
+    scannedProductImage: row.scanned_product_image ?? undefined,
+    nutritionData: row.nutrition_data ?? undefined,
+  });
+
+  // Load items from Supabase on mount
+  const loadItems = useCallback(async () => {
+    if (!user) return;
+    setIsLoadingItems(true);
+    try {
+      const { data, error } = await supabase
+        .from("grocery_items")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        console.warn("Could not load items:", error.message);
+      } else if (data) {
+        setItems(data.map(rowToItem));
+      }
+    } catch (e: any) {
+      // Fetch timed out or network error — show empty list instead of hanging
+      console.warn("Network error loading items (continuing offline):", e.message);
+    }
+    setIsLoadingItems(false);
+  }, [user]);
+
+  useEffect(() => {
+    loadItems();
+  }, [loadItems]);
+
+  // Insert item into DB, returns the DB id
+  const dbInsertItem = async (item: GroceryItem): Promise<string | null> => {
+    if (!user) return null;
+    const { data, error } = await supabase
+      .from("grocery_items")
+      .insert({
+        user_id: user.id,
+        name: item.name,
+        barcode: item.barcode ?? null,
+        brand: item.brand ?? null,
+        scanned_product_image: item.scannedProductImage ?? null,
+        nutrition_data: item.nutritionData ?? null,
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      console.warn("Error inserting item:", error);
+      return null;
+    }
+    return data?.id ?? null;
+  };
+
+  // Update item fields in DB
+  const dbUpdateItem = async (id: string, fields: Record<string, any>) => {
+    const { error } = await supabase
+      .from("grocery_items")
+      .update(fields)
+      .eq("id", id);
+    if (error) console.warn("Error updating item:", error);
+  };
+
+  // Delete item from DB
+  const dbDeleteItem = async (id: string) => {
+    const { error } = await supabase
+      .from("grocery_items")
+      .delete()
+      .eq("id", id);
+    if (error) console.warn("Error deleting item:", error);
+  };
+
+  // ─── End Database helpers ───
+
+  const fetchSuggestionFromBackend = async (
+    itemName: string,
+    nutritionInfo?: string,
+  ) => {
+    // Dev: localhost:3000/api/health-suggestion
+    // Prod: <supabase>/functions/v1/health-suggestion
+    const base = API_BASE_URL;
+    const usesFunctions = base.includes("/functions/v1");
+    const endpoint = usesFunctions
+      ? `${base}/health-suggestion`
+      : `${base}/api/health-suggestion`;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (!__DEV__ && SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.startsWith("YOUR")) {
+      headers["Authorization"] = `Bearer ${SUPABASE_ANON_KEY}`;
+    }
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        itemName,
+        nutritionContext: nutritionInfo,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error: ${response.status}`);
+    }
+
+    return response.json();
+  };
+
+  const fetchPexelsImage = async (query: string, itemId: string) => {
+    if (!PEXELS_API_KEY) return null;
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === itemId
+          ? { ...item, isLoadingSuggestionImage: true }
+          : item,
+      ),
+    );
+
+    try {
+      const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(
+        query,
+      )}&per_page=1&orientation=portrait`;
+
+      const resp = await fetch(url, {
+        headers: { Authorization: PEXELS_API_KEY },
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const first = data?.photos?.[0];
+      const imageUrl = first?.src?.medium || first?.src?.large || null;
+      if (imageUrl) {
+        setItems((prev) =>
+          prev.map((item) =>
+            item.id === itemId
+              ? { ...item, suggestionImageUrl: imageUrl }
+              : item,
+          ),
+        );
+      }
+      return imageUrl;
+    } catch (err) {
+      console.warn("Pexels fetch failed", err);
+      return null;
+    } finally {
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === itemId
+            ? { ...item, isLoadingSuggestionImage: false }
+            : item,
+        ),
+      );
+    }
+  };
 
   // Function to get health suggestion from backend proxy
   const getHealthSuggestion = async (
@@ -45,55 +223,53 @@ export default function GroceryList() {
     // Mark item as loading suggestion
     setItems((prevItems) =>
       prevItems.map((item) =>
-        item.id === itemId ? { ...item, isLoadingSuggestion: true } : item,
+        item.id === itemId
+          ? {
+              ...item,
+              isLoadingSuggestion: true,
+              suggestionImageUrl: undefined,
+              isLoadingSuggestionImage: false,
+            }
+          : item,
       ),
     );
 
     try {
-      // Dev: localhost:3000/api/health-suggestion
-      // Prod: <supabase>/functions/v1/health-suggestion
-      const endpoint = __DEV__
-        ? `${API_BASE_URL}/api/health-suggestion`
-        : `${API_BASE_URL}/health-suggestion`;
+      const data = await fetchSuggestionFromBackend(itemName, nutritionInfo);
+      const suggestionText = data?.healthSuggestion as string | undefined;
+      const suggestionReason = data?.suggestionReason || "";
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      // Supabase Edge Functions require the anon key in production
-      if (!__DEV__ && SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.startsWith("YOUR")) {
-        headers["Authorization"] = `Bearer ${SUPABASE_ANON_KEY}`;
-      }
-
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          itemName,
-          nutritionContext: nutritionInfo,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.healthSuggestion) {
-        setItems((prevItems) =>
-          prevItems.map((item) =>
+      if (!suggestionText) {
+        setItems((prev) =>
+          prev.map((item) =>
             item.id === itemId
-              ? {
-                  ...item,
-                  healthSuggestion: data.healthSuggestion,
-                  suggestionReason: data.suggestionReason || "",
-                  showingSuggestion: true,
-                  isLoadingSuggestion: false,
-                }
+              ? { ...item, isLoadingSuggestion: false }
               : item,
           ),
         );
+        return;
       }
+
+      setItems((prevItems) =>
+        prevItems.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                healthSuggestion: suggestionText,
+                suggestionReason,
+                showingSuggestion: true,
+                isLoadingSuggestion: false,
+              }
+            : item,
+        ),
+      );
+
+      dbUpdateItem(itemId, {
+        health_suggestion: suggestionText,
+        suggestion_reason: suggestionReason,
+      });
+
+      fetchPexelsImage(suggestionText, itemId);
     } catch (error) {
       console.error("Error getting health suggestion:", error);
       // Silently fail — don't block the user with an alert
@@ -127,11 +303,19 @@ export default function GroceryList() {
               suggestionReason: undefined,
               showingSuggestion: false,
               imageUrl: undefined,
+              suggestionImageUrl: undefined,
             };
           }
           return i;
         }),
       );
+      // Persist to DB
+      dbUpdateItem(id, {
+        name: newName,
+        health_suggestion: null,
+        suggestion_reason: null,
+        image_url: null,
+      });
     }
   };
 
@@ -180,28 +364,35 @@ export default function GroceryList() {
   useEffect(() => {
     if (pendingItems.length === 0) return;
     const newItems = consumePendingItems();
-    setItems((prev) => [...prev, ...newItems]);
-    // Trigger health suggestions for scanned items
-    newItems.forEach((item) => {
-      const nutritionContext = buildNutritionContext(item);
-      getHealthSuggestion(item.id, item.name, nutritionContext);
+
+    // Insert each scanned item into DB, then add to local state with DB id
+    newItems.forEach(async (item) => {
+      const dbId = await dbInsertItem(item);
+      const itemWithDbId = dbId ? { ...item, id: dbId } : item;
+      setItems((prev) => [itemWithDbId, ...prev]);
+      const nutritionContext = buildNutritionContext(itemWithDbId);
+      getHealthSuggestion(itemWithDbId.id, itemWithDbId.name, nutritionContext);
     });
   }, [pendingItems]);
 
-  const addItem = () => {
+  const addItem = async () => {
     if (inputText.trim() === "") return;
 
-    const newItemId = Date.now().toString();
     const newItemName = inputText.trim();
 
     const newItem: GroceryItem = {
-      id: newItemId,
+      id: Date.now().toString(), // temporary id
       name: newItemName,
       isEditing: false,
     };
 
-    setItems((prevItems) => [...prevItems, newItem]);
     setInputText("");
+
+    // Insert into DB first to get real id
+    const dbId = await dbInsertItem(newItem);
+    const itemWithId = dbId ? { ...newItem, id: dbId } : newItem;
+
+    setItems((prevItems) => [itemWithId, ...prevItems]);
 
     // Return focus to input field after a short delay
     setTimeout(() => {
@@ -211,20 +402,35 @@ export default function GroceryList() {
     }, 50);
 
     // Get health suggestion for the new item
-    getHealthSuggestion(newItemId, newItemName);
+    getHealthSuggestion(itemWithId.id, newItemName);
   };
 
   const deleteItem = (id: string) => {
-    Alert.alert("Delete Item", "Are you sure you want to delete this item?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => {
-          setItems(items.filter((item) => item.id !== id));
-        },
-      },
-    ]);
+    setItems((prev) => prev.filter((item) => item.id !== id));
+    dbDeleteItem(id);
+  };
+
+  const renderRightActions = (
+    _progress: Animated.AnimatedInterpolation<number>,
+    dragX: Animated.AnimatedInterpolation<number>,
+    itemId: string,
+  ) => {
+    const scale = dragX.interpolate({
+      inputRange: [-100, 0],
+      outputRange: [1, 0.5],
+      extrapolate: "clamp",
+    });
+    return (
+      <TouchableOpacity
+        style={styles.swipeDeleteContainer}
+        onPress={() => deleteItem(itemId)}
+        activeOpacity={0.7}
+      >
+        <Animated.Text style={[styles.swipeDeleteText, { transform: [{ scale }] }]}>
+          🗑️
+        </Animated.Text>
+      </TouchableOpacity>
+    );
   };
 
   const startEditing = (id: string) => {
@@ -241,9 +447,10 @@ export default function GroceryList() {
   const saveEdit = (id: string) => {
     if (editText.trim() === "") return;
 
+    const newName = editText.trim();
     const updatedItems = items.map((item) => {
       if (item.id === id) {
-        return { ...item, name: editText.trim(), isEditing: false };
+        return { ...item, name: newName, isEditing: false };
       }
       return item;
     });
@@ -251,6 +458,8 @@ export default function GroceryList() {
     setItems(updatedItems);
     setEditText("");
     Keyboard.dismiss();
+    // Persist to DB
+    dbUpdateItem(id, { name: newName });
   };
 
   // Get the emoji icon for a food item
@@ -314,7 +523,15 @@ export default function GroceryList() {
     return "🛒";
   };
 
-  const renderItem = ({ item }: { item: GroceryItem }) => (
+  const renderItem = ({ item }: { item: GroceryItem }) => {
+    return (
+    <Swipeable
+      renderRightActions={(progress, dragX) =>
+        renderRightActions(progress, dragX, item.id)
+      }
+      overshootRight={false}
+      friction={2}
+    >
     <ThemedView style={styles.itemContainer}>
       {item.isEditing ? (
         <View style={styles.editContainer}>
@@ -362,20 +579,13 @@ export default function GroceryList() {
               )}
             </TouchableOpacity>
             <ThemedText style={styles.itemText}>{item.name}</ThemedText>
-            <View style={styles.buttonContainer}>
-              <TouchableOpacity
-                style={[styles.button, { backgroundColor: tintColor }]}
-                onPress={() => startEditing(item.id)}
-              >
-                <Text style={styles.buttonText}>Edit</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.button, styles.deleteButton]}
-                onPress={() => deleteItem(item.id)}
-              >
-                <Text style={styles.buttonText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={styles.editIconButton}
+              onPress={() => startEditing(item.id)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.editIcon}>✏️</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Nutrition badges for scanned items */}
@@ -458,6 +668,26 @@ export default function GroceryList() {
                     {item.suggestionReason}
                   </ThemedText>
                 )}
+                {item.isLoadingSuggestionImage && (
+                  <View style={styles.suggestionImagePlaceholder}>
+                    <ActivityIndicator color={tintColor} />
+                  </View>
+                )}
+                {!item.isLoadingSuggestionImage && item.suggestionImageUrl && (
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      setZoomedImageUrl(item.suggestionImageUrl || null);
+                      setZoomedImageName(item.healthSuggestion || "Suggestion");
+                    }}
+                  >
+                    <Image
+                      source={{ uri: item.suggestionImageUrl }}
+                      style={styles.suggestionImage}
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
+                )}
               </View>
               <View style={styles.suggestionButtonRow}>
                 <TouchableOpacity
@@ -484,7 +714,9 @@ export default function GroceryList() {
         </View>
       )}
     </ThemedView>
+    </Swipeable>
   );
+  };
 
   // Focus the input field when component mounts
   const [inputRef, setInputRef] = useState<TextInput | null>(null);
@@ -507,8 +739,18 @@ export default function GroceryList() {
         <ThemedText type="title" style={styles.headerTitle}>
           AteWell.AI 🍽️💡
         </ThemedText>
+        <TouchableOpacity style={styles.signOutButton} onPress={signOut}>
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
       </View>
 
+      {isLoadingItems ? (
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+          <ActivityIndicator size="large" color={tintColor} />
+          <ThemedText style={{ marginTop: 10 }}>Loading your list...</ThemedText>
+        </View>
+      ) : (
+      <>
       <View style={styles.inputContainer}>
         <TextInput
           ref={(ref) => setInputRef(ref)}
@@ -531,21 +773,39 @@ export default function GroceryList() {
         </TouchableOpacity>
       </View>
 
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <View style={styles.listContainer}>
-          <FlatList
-            data={items}
-            renderItem={renderItem}
-            keyExtractor={(item) => item.id}
-            style={styles.list}
-            ListEmptyComponent={
-              <ThemedText style={styles.emptyListText}>
-                Your grocery list is empty. Add some items!
-              </ThemedText>
-            }
-          />
-        </View>
-      </TouchableWithoutFeedback>
+      <View style={styles.listContainer}>
+        <FlatList
+          data={items}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id}
+          style={styles.list}
+          contentContainerStyle={{ paddingBottom: 32 }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          initialNumToRender={8}
+          maxToRenderPerBatch={6}
+          updateCellsBatchingPeriod={50}
+          windowSize={5}
+          removeClippedSubviews
+          scrollEventThrottle={16}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={async () => {
+                setIsRefreshing(true);
+                await loadItems();
+                setIsRefreshing(false);
+              }}
+              tintColor={tintColor}
+            />
+          }
+          ListEmptyComponent={
+            <ThemedText style={styles.emptyListText}>
+              Your grocery list is empty. Add some items!
+            </ThemedText>
+          }
+        />
+      </View>
 
       {/* Zoomed Image Modal */}
       <Modal
@@ -577,6 +837,8 @@ export default function GroceryList() {
           </View>
         </TouchableOpacity>
       </Modal>
+      </>
+      )}
     </View>
   );
 }
@@ -681,8 +943,25 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginLeft: 8,
   },
-  deleteButton: {
+  editIconButton: {
+    padding: 6,
+    marginLeft: 8,
+  },
+  editIcon: {
+    fontSize: 20,
+  },
+  swipeDeleteContainer: {
     backgroundColor: "#FF3B30",
+    justifyContent: "center",
+    alignItems: "center",
+    width: 80,
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
+    marginVertical: 6,
+  },
+  swipeDeleteText: {
+    fontSize: 28,
+    color: "white",
   },
   editContainer: {
     flex: 1,
@@ -756,6 +1035,20 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginHorizontal: 4,
   },
+  suggestionImage: {
+    width: "100%",
+    height: 160,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  suggestionImagePlaceholder: {
+    height: 160,
+    borderRadius: 8,
+    marginTop: 8,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#e8ecf2",
+  },
   headerTitle: {
     marginTop: 10,
     marginBottom: 15,
@@ -767,8 +1060,19 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "space-between",
     marginBottom: 5,
+  },
+  signOutButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: "#8E8E93",
+  },
+  signOutText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "600",
   },
   zoomModalOverlay: {
     flex: 1,

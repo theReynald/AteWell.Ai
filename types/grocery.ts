@@ -20,6 +20,8 @@ export type GroceryItem = {
   showingSuggestion?: boolean;
   isLoadingSuggestion?: boolean;
   imageUrl?: string;
+  suggestionImageUrl?: string;
+  isLoadingSuggestionImage?: boolean;
   isLoadingImage?: boolean;
   // Barcode scan data
   barcode?: string;
