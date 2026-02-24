@@ -79,7 +79,7 @@ export default function GroceryList() {
         .from("grocery_items")
         .select("*")
         .eq("user_id", user.id)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false });
 
       if (error) {
         console.warn("Could not load items:", error.message);
@@ -337,9 +337,21 @@ export default function GroceryList() {
   const dismissSuggestion = (id: string) => {
     setItems((prevItems) =>
       prevItems.map((item) =>
-        item.id === id ? { ...item, showingSuggestion: false } : item,
+        item.id === id
+          ? {
+              ...item,
+              showingSuggestion: false,
+              healthSuggestion: undefined,
+              suggestionReason: undefined,
+            }
+          : item,
       ),
     );
+    // Clear from DB so web and future loads don't re-show it
+    dbUpdateItem(id, {
+      health_suggestion: null,
+      suggestion_reason: null,
+    });
   };
 
   // Build nutrition context string from scanned product data
