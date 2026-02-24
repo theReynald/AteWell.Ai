@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "AteWell.AI uses Face ID to sign you in quickly and securely."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -25,6 +28,12 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "AteWell.AI uses Face ID to sign you in quickly and securely."
+        }
+      ],
       [
         "expo-splash-screen",
         {

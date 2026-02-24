@@ -1,5 +1,5 @@
 import { useAuth } from "@/contexts/AuthContext";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -13,11 +13,39 @@ import {
 } from "react-native";
 
 export default function AuthScreen() {
-  const { signIn, signUp } = useAuth();
+  const {
+    signIn,
+    signUp,
+    signInWithBiometrics,
+    biometricAvailable,
+    biometricEnabled,
+    biometricLabel,
+    enableBiometricLogin,
+  } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isBiometricLoading, setIsBiometricLoading] = useState(false);
+
+  // Auto-prompt biometric sign-in on launch if enabled
+  useEffect(() => {
+    if (biometricAvailable && biometricEnabled) {
+      handleBiometricSignIn();
+    }
+  }, [biometricAvailable, biometricEnabled]);
+
+  const handleBiometricSignIn = async () => {
+    setIsBiometricLoading(true);
+    const { error } = await signInWithBiometrics();
+    if (error) {
+      // Only show alert for errors other than cancellation
+      if (error !== "Authentication cancelled.") {
+        Alert.alert(biometricLabel, error);
+      }
+    }
+    setIsBiometricLoading(false);
+  };
 
   const handleSubmit = async () => {
     if (!email.trim() || !password.trim()) {
@@ -48,6 +76,21 @@ export default function AuthScreen() {
         const { error } = await signIn(email.trim(), password);
         if (error) {
           Alert.alert("Sign In Error", error);
+        } else if (biometricAvailable && !biometricEnabled) {
+          // Offer to enable biometric login after first successful sign-in
+          Alert.alert(
+            `Enable ${biometricLabel}?`,
+            `Would you like to use ${biometricLabel} to sign in next time?`,
+            [
+              { text: "Not Now", style: "cancel" },
+              {
+                text: "Enable",
+                onPress: async () => {
+                  await enableBiometricLogin();
+                },
+              },
+            ],
+          );
         }
       }
     } catch (e: any) {
@@ -105,6 +148,27 @@ export default function AuthScreen() {
               </Text>
             )}
           </TouchableOpacity>
+
+          {biometricAvailable && biometricEnabled && !isSignUp && (
+            <TouchableOpacity
+              style={[styles.biometricButton, isBiometricLoading && styles.buttonDisabled]}
+              onPress={handleBiometricSignIn}
+              disabled={isBiometricLoading}
+            >
+              {isBiometricLoading ? (
+                <ActivityIndicator color="#2089dc" />
+              ) : (
+                <>
+                  <Text style={styles.biometricIcon}>
+                    {biometricLabel === "Face ID" ? "👤" : "👆"}
+                  </Text>
+                  <Text style={styles.biometricText}>
+                    Sign in with {biometricLabel}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={styles.switchButton}
@@ -185,5 +249,24 @@ const styles = StyleSheet.create({
   switchText: {
     color: "#2089dc",
     fontSize: 15,
+  },
+  biometricButton: {
+    height: 50,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 14,
+    borderWidth: 1.5,
+    borderColor: "#2089dc",
+    flexDirection: "row",
+    gap: 8,
+  },
+  biometricIcon: {
+    fontSize: 22,
+  },
+  biometricText: {
+    color: "#2089dc",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });

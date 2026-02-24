@@ -1,6 +1,8 @@
+import { IconSymbol } from "@/components/ui/IconSymbol";
 import { API_BASE_URL, SUPABASE_ANON_KEY } from "@/constants/Api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useGrocery } from "@/contexts/GroceryContext";
+import { useColorScheme } from "@/hooks/useColorScheme";
 import { useThemeColor } from "@/hooks/useThemeColor";
 import { supabase } from "@/lib/supabase";
 import { GroceryItem } from "@/types/grocery";
@@ -9,6 +11,7 @@ import {
     getNovaGroupLabel,
     getNutriscoreColor,
 } from "@/utils/openFoodFacts";
+import { useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
     ActivityIndicator,
@@ -33,16 +36,20 @@ const PEXELS_API_KEY = process.env.EXPO_PUBLIC_PEXELS_API_KEY;
 export default function GroceryList() {
   const [items, setItems] = useState<GroceryItem[]>([]);
   const { pendingItems, consumePendingItems } = useGrocery();
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const [inputText, setInputText] = useState("");
   const [editText, setEditText] = useState("");
   const [zoomedImageUrl, setZoomedImageUrl] = useState<string | null>(null);
   const [zoomedImageName, setZoomedImageName] = useState<string>("");
   const [isLoadingItems, setIsLoadingItems] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false);
+  const router = useRouter();
 
   const textColor = useThemeColor({}, "text");
   const tintColor = useThemeColor({}, "tint");
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === "dark";
 
   // ─── Database helpers ───
 
@@ -179,17 +186,24 @@ export default function GroceryList() {
     );
 
     try {
-      const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(
-        query,
-      )}&per_page=1&orientation=portrait`;
+      // Try the exact query first, then fall back to appending "food" for better results
+      const queries = [query, `${query} food`];
+      let imageUrl: string | null = null;
 
-      const resp = await fetch(url, {
-        headers: { Authorization: PEXELS_API_KEY },
-      });
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      const first = data?.photos?.[0];
-      const imageUrl = first?.src?.medium || first?.src?.large || null;
+      for (const q of queries) {
+        const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(
+          q,
+        )}&per_page=1&orientation=portrait`;
+
+        const resp = await fetch(url, {
+          headers: { Authorization: PEXELS_API_KEY },
+        });
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        const first = data?.photos?.[0];
+        imageUrl = first?.src?.medium || first?.src?.large || null;
+        if (imageUrl) break;
+      }
       if (imageUrl) {
         setItems((prev) =>
           prev.map((item) =>
@@ -646,7 +660,7 @@ export default function GroceryList() {
 
           {/* Health suggestion area */}
           {item.isLoadingSuggestion && (
-            <View style={styles.suggestionLoading}>
+            <View style={[styles.suggestionLoading, isDark && { backgroundColor: '#1e2a30' }]}>
               <ActivityIndicator color={tintColor} />
               <ThemedText style={styles.suggestionLoadingText}>
                 Finding healthier alternative...
@@ -655,7 +669,7 @@ export default function GroceryList() {
           )}
 
           {item.showingSuggestion && item.healthSuggestion && (
-            <View style={styles.suggestionContainer}>
+            <View style={[styles.suggestionContainer, isDark && { backgroundColor: '#1a2a35', borderLeftColor: '#3aad4a' }]}>
               <View style={styles.suggestionContent}>
                 <ThemedText style={styles.suggestionTitle}>
                   Healthier Alternative:
@@ -664,12 +678,12 @@ export default function GroceryList() {
                   {item.healthSuggestion}
                 </ThemedText>
                 {item.suggestionReason && (
-                  <ThemedText style={styles.suggestionReason}>
+                  <ThemedText style={[styles.suggestionReason, isDark && { color: '#aab4be' }]}>
                     {item.suggestionReason}
                   </ThemedText>
                 )}
                 {item.isLoadingSuggestionImage && (
-                  <View style={styles.suggestionImagePlaceholder}>
+                  <View style={[styles.suggestionImagePlaceholder, isDark && { backgroundColor: '#232d35' }]}>
                     <ActivityIndicator color={tintColor} />
                   </View>
                 )}
@@ -735,14 +749,9 @@ export default function GroceryList() {
     <View style={styles.container}>
       <View style={styles.spacer} />
 
-      <View style={styles.headerRow}>
-        <ThemedText type="title" style={styles.headerTitle}>
-          AteWell.AI 🍽️💡
-        </ThemedText>
-        <TouchableOpacity style={styles.signOutButton} onPress={signOut}>
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
+      <ThemedText type="title" style={styles.headerTitle}>
+        AteWell.AI 🍽️💡
+      </ThemedText>
 
       {isLoadingItems ? (
         <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
@@ -752,25 +761,33 @@ export default function GroceryList() {
       ) : (
       <>
       <View style={styles.inputContainer}>
-        <TextInput
-          ref={(ref) => setInputRef(ref)}
-          style={[styles.input, { color: textColor }]}
-          placeholder="Add an item..."
-          placeholderTextColor="#888"
-          value={inputText}
-          onChangeText={setInputText}
-          autoFocus={true}
-          blurOnSubmit={false}
-          onSubmitEditing={addItem}
-          returnKeyType="done"
-          enablesReturnKeyAutomatically={true}
-        />
-        <TouchableOpacity
-          style={[styles.addButton, { backgroundColor: tintColor }]}
-          onPress={addItem}
-        >
-          <Text style={styles.buttonText}>Add</Text>
-        </TouchableOpacity>
+        <View style={styles.inputWrapper}>
+          <TextInput
+            ref={(ref) => setInputRef(ref)}
+            style={[styles.input, { color: textColor }]}
+            placeholder="Add Item"
+            placeholderTextColor="#888"
+            value={inputText}
+            onChangeText={setInputText}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
+            autoFocus={true}
+            blurOnSubmit={false}
+            onSubmitEditing={addItem}
+            returnKeyType="done"
+            enablesReturnKeyAutomatically={true}
+          />
+          {!inputText && (
+            <TouchableOpacity
+              style={styles.inlineScanButton}
+              onPress={() => router.push("/(tabs)/scan")}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <IconSymbol name="barcode.viewfinder" size={28} color={tintColor} />
+              <Text style={[styles.inlineScanLabel, { color: tintColor }]}>Scan</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       <View style={styles.listContainer}>
@@ -859,22 +876,32 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: "row",
     marginBottom: 20,
+    alignItems: "center",
+  },
+  inputWrapper: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    height: 50,
+    paddingRight: 6,
   },
   input: {
     flex: 1,
     height: 50,
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
     paddingHorizontal: 10,
-    marginRight: 10,
   },
-  addButton: {
-    width: 80,
-    height: 50,
+  inlineScanButton: {
+    padding: 6,
     justifyContent: "center",
     alignItems: "center",
-    borderRadius: 8,
+  },
+  inlineScanLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    marginTop: 1,
   },
   buttonText: {
     color: "white",
@@ -1056,23 +1083,6 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: "bold",
     color: "#2089dc",
-  },
-  headerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 5,
-  },
-  signOutButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    backgroundColor: "#8E8E93",
-  },
-  signOutText: {
-    color: "white",
-    fontSize: 13,
-    fontWeight: "600",
   },
   zoomModalOverlay: {
     flex: 1,
